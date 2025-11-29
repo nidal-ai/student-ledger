@@ -1,11 +1,17 @@
 let provider, signer, contract;
 
+// ==========================================
+// 1. INITIALISATION & THEME
+// ==========================================
 window.onload = () => {
     if (typeof CONTRACT_ADDRESS === 'undefined') { alert("Erreur: config.js manquant"); return; }
+    
+    // Gestion du thème
     const savedTheme = localStorage.getItem('theme') || 'dark';
     if (savedTheme === 'dark') document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
 
+    // Animation de chargement
     setTimeout(() => {
         const loader = document.getElementById('loader-overlay');
         const content = document.getElementById('app-content');
@@ -31,6 +37,9 @@ window.toggleTheme = function() {
     }
 };
 
+// ==========================================
+// 2. NAVIGATION
+// ==========================================
 window.handleChoice = function(hasMetaMask) {
     document.getElementById('welcome-screen').style.opacity = '0';
     setTimeout(() => {
@@ -68,6 +77,9 @@ window.checkMobileEnv = function() {
     }
 };
 
+// ==========================================
+// 3. LOGIQUE REGISTRE ÉTUDIANT
+// ==========================================
 window.addStudent = async function() {
     const fName = document.getElementById('fName').value;
     const lName = document.getElementById('lName').value;
@@ -170,7 +182,6 @@ async function loadStudents() {
                     `<a href="https://sepolia.etherscan.io/tx/${realHash}" target="_blank" class="inline-block px-2 py-1 rounded bg-indigo-100 text-indigo-600 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-400 dark:border-indigo-500/20 text-xs font-mono hover:bg-indigo-200 dark:hover:bg-indigo-500/20 transition-colors">HASH ↗</a>` : 
                     `<span class="text-gray-400 dark:text-slate-600 text-xs">En attente</span>`;
 
-                // --- FORMATAGE DATE (YYYY-MM-DD -> DD/MM/YYYY) ---
                 let dateDisplay = s.dob;
                 if (s.dob && s.dob.includes('-')) {
                     const [yyyy, mm, dd] = s.dob.split('-');
@@ -215,3 +226,102 @@ window.filterStudents = function() {
         }       
     }
 };
+
+// ==========================================
+// 4. MODULE NFT (VÉRIFICATION + QR CODE)
+// ==========================================
+async function verifyDiploma() {
+    const tokenId = document.getElementById('nftTokenId').value;
+    const resultDiv = document.getElementById('nft-result');
+    const errorMsg = document.getElementById('nft-error');
+    
+    // Reset
+    resultDiv.classList.add('hidden');
+    errorMsg.classList.add('hidden');
+
+    if (tokenId === "") return alert("Veuillez entrer un ID");
+
+    try {
+        console.log("Adresse Contrat NFT :", NFT_CONTRACT_ADDRESS);
+
+        const nftContract = new ethers.Contract(NFT_CONTRACT_ADDRESS, NFT_ABI, provider);
+        
+        // 1. Appel Blockchain
+        const tokenURI = await nftContract.tokenURI(tokenId);
+        const owner = await nftContract.ownerOf(tokenId);
+        
+        // 2. Nettoyage du lien IPFS (Passerelle Universelle)
+        let cleanURI = tokenURI.replace("ipfs://", "").replace("ipfs/", "");
+        const gateway = "https://ipfs.io/ipfs/"; 
+        const httpURI = gateway + cleanURI;
+
+        console.log("Téléchargement :", httpURI);
+
+        // 3. Récupération JSON
+        const response = await fetch(httpURI);
+        if (!response.ok) throw new Error("Erreur réseau IPFS (" + response.status + "). Réessayez dans 30s.");
+        
+        const metadata = await response.json();
+
+        // 4. Extraction Données
+        let firstName = "Non spécifié";
+        let lastName = "";
+        let cin = "--";
+        let date = "--";
+
+        if (metadata.attributes) {
+            const fNameAttr = metadata.attributes.find(a => a.trait_type === "Prénom" || a.trait_type === "First Name");
+            const lNameAttr = metadata.attributes.find(a => a.trait_type === "Nom" || a.trait_type === "Last Name");
+            const cinAttr = metadata.attributes.find(a => a.trait_type === "CIN" || a.trait_type === "ID");
+            const dateAttr = metadata.attributes.find(a => a.trait_type === "Date");
+
+            if (fNameAttr) firstName = fNameAttr.value;
+            if (lNameAttr) lastName = lNameAttr.value;
+            if (cinAttr) cin = cinAttr.value;
+            if (dateAttr) date = dateAttr.value;
+        }
+
+        // 5. Affichage
+        document.getElementById('nft-title').innerText = metadata.name;
+        document.getElementById('nft-desc').innerText = metadata.description;
+        
+        // Image
+        let imgRaw = metadata.image.replace("ipfs://", "").replace("ipfs/", "");
+        document.getElementById('nft-image').src = gateway + imgRaw;
+
+        // Champs
+        document.getElementById('nft-student-name').innerText = `${firstName} ${lastName}`;
+        document.getElementById('nft-cin').innerText = cin;
+        document.getElementById('nft-date').innerText = date;
+
+        // Lien Etherscan
+        const etherscanLink = `https://sepolia.etherscan.io/token/${NFT_CONTRACT_ADDRESS}?a=${tokenId}`;
+        document.getElementById('nft-etherscan-link').href = etherscanLink;
+        document.getElementById('nft-owner-addr').innerText = "Propriétaire: " + owner;
+
+        // 6. GÉNÉRATION DU QR CODE
+        const qrContainer = document.getElementById("qrcode");
+        if(qrContainer) {
+            qrContainer.innerHTML = ""; // Vider l'ancien
+            new QRCode(qrContainer, {
+                text: etherscanLink,
+                width: 60,
+                height: 60,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.L
+            });
+        }
+
+        resultDiv.classList.remove('hidden');
+
+    } catch (err) {
+        console.error("ERREUR:", err);
+        if (err.code === 'CALL_EXCEPTION') {
+            errorMsg.innerText = "Erreur : Cet ID (" + tokenId + ") n'existe pas sur ce contrat.";
+        } else {
+            errorMsg.innerText = "Erreur : " + err.message;
+        }
+        errorMsg.classList.remove('hidden');
+    }
+}
